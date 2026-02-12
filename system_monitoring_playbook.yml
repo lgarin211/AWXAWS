@@ -1,0 +1,73 @@
+---
+- name: System Monitoring and Status Check
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # Jumlah baris history login yang ingin ditampilkan
+    login_history_count: 5
+
+  tasks:
+    # 1. Cek Sisa Disk (Disk Usage)
+    - name: Capture Disk Usage
+      shell: df -h
+      register: disk_usage
+      changed_when: false
+
+    # 2. Cek Pemakaian CPU (CPU Usage)
+    # Menggunakan 'top' dalam batch mode (-b) sekali iterasi (-n 1)
+    # Mengambil header dan baris Cpu(s)
+    - name: Capture CPU Usage
+      shell: top -bn1 | grep "Cpu(s)"
+      register: cpu_usage
+      changed_when: false
+
+    # 3. Cek History Network In/Out
+    # Menggunakan 'sar' dari package sysstat.
+    # Jika sysstat belum ada, kita coba install atau skip jika gagal.
+    # Playbook ini berasumsi target adalah keluarga RedHat/Debian.
+    - name: Ensure sysstat is installed
+      package:
+        name: sysstat
+        state: present
+      ignore_errors: yes
+
+    - name: Capture Network Statistics (1 second sample)
+      shell: sar -n DEV 1 1 | grep "Average" -A 10
+      register: network_stats
+      ignore_errors: yes
+      changed_when: false
+
+    # Fallback jika 'sar' tidak ada/gagal, gunakan ip -s link
+    - name: Capture Network Statistics (Fallback via ip link)
+      shell: ip -s link
+      register: network_stats_fallback
+      when: network_stats.failed is defined and network_stats.failed
+      changed_when: false
+
+    # 4. Cek User Login Terakhir
+    - name: Capture Last User Logins
+      shell: last -n {{ login_history_count }}
+      register: last_logins
+      changed_when: false
+
+    # 5. Menampilkan Hasil (Untuk Output di AWX)
+    - name: Show System Report
+      debug:
+        msg:
+          - "=============================================="
+          - "REPORT FOR HOST: {{ inventory_hostname }}"
+          - "=============================================="
+          - ">>> 1. DISK USAGE <<<"
+          - "{{ disk_usage.stdout_lines }}"
+          - ""
+          - ">>> 2. CPU USAGE <<<"
+          - "{{ cpu_usage.stdout_lines }}"
+          - ""
+          - ">>> 3. NETWORK STATS <<<"
+          - "{{ network_stats.stdout_lines if (network_stats.rc is defined and network_stats.rc == 0) else network_stats_fallback.stdout_lines }}"
+          - ""
+          - ">>> 4. LAST {{ login_history_count }} LOGINS <<<"
+          - "{{ last_logins.stdout_lines }}"
+          - "=============================================="
